@@ -1,0 +1,6 @@
+{
+    "editor.formatOnSave": true,
+    "code-runner.executorMap": {
+        "python": "python3.6"
+    }
+}
