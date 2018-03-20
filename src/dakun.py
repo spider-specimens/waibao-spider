@@ -6,25 +6,21 @@ from headers import Headers
 from bs4 import BeautifulSoup
 import time
 import re
+import numpy as np
+from storage import Storage
 
 headers = Headers()
+storage = Storage()
 
 
 class DakunSpider(object):
 
-    # 请求列表数据
-    def fetch_list(self, type=None, page=1):
-        url = 'https://pro.lagou.com/project'
+    # 获取列表数据
+    def fetch_list(self, _type, page):
+        url = 'https://pro.lagou.com/project/%s/%d' % (_type, page)
 
-        if type:
-            url += '/%s' % type
+        res = requests.get(url, headers=headers.getHeader())
 
-        url += '/%d' % page
-
-        return requests.get(url, headers=headers.getHeader())
-
-    # 解析列表数据
-    def parse_list_data(self, res):
         _result = []
 
         soup = BeautifulSoup(res.text,
@@ -36,36 +32,13 @@ class DakunSpider(object):
             if not link:
                 continue
 
-            status = link.find('span', class_='recruiting')
-            title = link.find('h3')
-            price = link.find('span', class_='range')
-            categories = link.find_all('span', class_='category_tag')
-
-            if price:
-                price = self.parse_price(price.text)
-
-            for index in range(len(categories)):
-                categories[index] = categories[index].text
-
-            _result.append({
-                'detail_url': link.get('href'),
-                'status': status.text if status else '',
-                'title': title.text if title else '',
-                'min_price': price[0],
-                'max_price': price[1],
-                'categories': categories,
-            })
+            _result.append(link.get('href'))
 
         return _result
 
-    # 请求详情界面
+    # 获取详情数据
     def fetch_detail(self, url):
-        return requests.get(url, headers=headers.getHeader())
-
-    # 解析详情
-    def parse_detail_data(self, res):
-        if not res.text:
-            return None
+        res = requests.get(url, headers=headers.getHeader())
 
         _result = {
             'target': 1,
@@ -103,7 +76,7 @@ class DakunSpider(object):
             # project price
             m = re.compile('global.projectPrice = "(.*)";').search(script.text)
             if m:
-                _price = self.parse_price(m.group(1))
+                _price = self._parse_price(m.group(1))
                 _result['min_price'] = _price[0]
                 _result['max_price'] = _price[1]
 
@@ -115,23 +88,27 @@ class DakunSpider(object):
         base_info = soup.select('ul.baseInfo li span')
 
         # categories
-        _result['categories'] = [base_info[1].text.split('/')[0]]
+        _result['categories'] = [
+            self._find_base_info_value(base_info, '基本信息').split('/')[0]
+        ]
         for item in soup.select('div.category_list .category_tag'):
             _result['categories'].append(item.text)
 
         # company name
-        _result['company_name'] = base_info[3].text
+        _result['company_name'] = self._find_base_info_value(base_info, '公司名称')
 
         # publish time
         _result['publish_time'] = int(
-            time.mktime(time.strptime(base_info[5].text, '%Y-%m-%d %H:%M:%S'))
-            * 1000)
+            time.mktime(
+                time.strptime(
+                    self._find_base_info_value(base_info, '发布时间'),
+                    '%Y-%m-%d %H:%M:%S')) * 1000)
 
         # project date
         daterange = soup.select_one(
             '.project_panel div:nth-of-type(2) .short_val')
         if daterange:
-            daterange = self.parse_time(daterange.text)
+            daterange = self._parse_time(daterange.text)
             keys = [
                 'max_date_value', 'max_date_unit', 'min_date_value',
                 'min_date_unit'
@@ -147,8 +124,36 @@ class DakunSpider(object):
 
         return _result
 
+    # 获取所有数据
+    def run(self):
+        for t in ['kaifa', 'sheji', 'shichang', 'chanpin']:
+            page = 1
+
+            while (1):
+                time.sleep(np.random.rand() * 2)
+                print('开始请求列表数据，条件（type = %s, page = %d）' % (t, page))
+
+                _list = self.fetch_list(t, page)
+
+                print('列表请求成功，共%d条，开始请求详情' % (len(_list)))
+
+                for detail_url in _list:
+                    time.sleep(np.random.rand() * 2)
+
+                    print('\t开始请求详情url: %s' % (detail_url))
+                    detail = self.fetch_detail(detail_url)
+                    print('\t请求成功，开始保存')
+
+                    storage.upsert(detail)
+
+                if (len(_list) % 9 == 0):
+                    page = page + 1
+                else:
+                    page = 1
+                    break
+
     # 解析价格
-    def parse_price(self, text):
+    def _parse_price(self, text):
         _result = [0, 0]
 
         if text:
@@ -175,7 +180,7 @@ class DakunSpider(object):
         return _result
 
     # 解析开发时间
-    def parse_time(self, text):
+    def _parse_time(self, text):
         _result = [0, 0, 0, 0]
 
         if text:
@@ -202,3 +207,11 @@ class DakunSpider(object):
                 _result[3] = 2
 
         return _result
+
+    # 提取基本信息
+    def _find_base_info_value(self, base_info, title):
+        for index in range(len(base_info)):
+            if title in base_info[index].text:
+                return base_info[index + 1].text
+
+        return ''
